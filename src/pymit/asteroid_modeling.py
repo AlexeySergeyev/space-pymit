@@ -1,5 +1,6 @@
 import os
 import csv
+import json
 import subprocess
 from pathlib import Path
 from typing import Union
@@ -8,7 +9,6 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import plotly.graph_objects as go
-from pathlib import Path
 
 # Module directory paths
 MODULE_DIR = Path(__file__).parent.resolve()
@@ -23,6 +23,153 @@ class AsteroidModelError(Exception):
     """Exception raised for errors in the Asteroid Modeling pipeline."""
     pass
 
+class AsteroidModeler:
+    """
+    Object-oriented wrapper for the PyMit asteroid modeling pipeline.
+    Manages state for photometric data, configuration options, and generated 3D shape models.
+    """
+    
+    def __init__(self, asteroid_name: str = "Asteroid", output_dir: str = "output"):
+        self.asteroid_name = asteroid_name
+        self.output_dir = Path(output_dir)
+        self.lightcurves: pd.DataFrame = None
+        self.inversion_options: dict = {}
+        self.conjgradinv_options: dict = {}
+        self.vertices: np.ndarray = None
+        self.faces: list[list[int]] = None
+        
+        # Ensure output directory exists
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+    def load_lightcurves(self, source: Union[str, pd.DataFrame]):
+        """
+        Ingests lightcurve data from a CSV file path or a pandas DataFrame directly.
+        Internally standardizes the format into self.lightcurves.
+        """
+        if isinstance(source, pd.DataFrame):
+            self.lightcurves = source.copy()
+        elif isinstance(source, str) and source.lower().endswith('.csv'):
+            self.lightcurves = pd.read_csv(source)
+            # Default empty mapping for 'is_relative' and 'curve_id' if missing exactly as standalone helpers used to
+            if 'is_relative' not in self.lightcurves.columns:
+                self.lightcurves['is_relative'] = 0
+            if 'curve_id' not in self.lightcurves.columns:
+                self.lightcurves['curve_id'] = 1
+        else:
+            raise ValueError("Data source must be a pandas.DataFrame or a valid .csv file path.")
+        return self
+
+    def load_parameters(self, inversion_json: Union[str, dict] = None, conjgradinv_json: Union[str, dict] = None):
+        """
+        Load configuration parameters using JSON strings, file paths, or dictionaries.
+        """
+        def parse_json_input(data):
+            if isinstance(data, dict):
+                return data
+            if isinstance(data, str):
+                if Path(data).is_file():
+                    with open(data, 'r') as f:
+                        return json.load(f)
+                else:
+                    return json.loads(data)
+            return {}
+
+        if inversion_json is not None:
+            self.inversion_options.update(parse_json_input(inversion_json))
+        if conjgradinv_json is not None:
+            self.conjgradinv_options.update(parse_json_input(conjgradinv_json))
+        return self
+
+    def run_inversion(self):
+        """
+        Executes the asteroid modeling pipeline using the stored class state.
+        Runs convexinv and minkowski executables to generate the 3D footprint.
+        """
+        if self.lightcurves is None or self.lightcurves.empty:
+            raise AsteroidModelError("No lightcurves loaded. Please call load_lightcurves() first.")
+            
+        base_name = self.asteroid_name.replace(' ', '_')
+        
+        tmp_lcs_file = None
+        tmp_param_file = None
+        tmp_conj_file = None
+        
+        try:
+            # 1. Output convexinv parameter file dynamically
+            tmp_param_file = str(self.output_dir / f"{base_name}_input_convexinv.txt")
+            create_convexinv_param_file(self.inversion_options, tmp_param_file)
+            
+            # 2. Output conjgradinv parameter file dynamically (for minkowski)
+            tmp_conj_file = str(self.output_dir / "input_conjgradinv")
+            create_conjgradinv_param_file(self.conjgradinv_options, tmp_conj_file)
+            
+            # 3. Output lightcurves to expected C text format
+            filename = f"{base_name}_lcs.txt"
+            tmp_lcs_file = str(self.output_dir / filename)
+            print(f"Converting DataFrame input to convexinv text format...")
+            dataframe_to_lcs_format(self.lightcurves, tmp_lcs_file)
+            
+            # Formulate output artifact paths
+            actual_output_areas = str(self.output_dir / f"{base_name}_areas.txt")
+            actual_output_lc = str(self.output_dir / f"{base_name}_lc_output.csv")
+            
+            # Step 1: Run convexinv
+            print("Running convexinv... (this operates silently and may take a moment)")
+            run_convexinv(tmp_param_file, tmp_lcs_file, actual_output_areas, actual_output_lc)
+            
+            # Step 2: Run minkowski
+            print("Reconstructing 3D shape from generated features using minkowski...")
+            self.vertices, self.faces = run_minkowski(actual_output_areas, pwd_dir=str(self.output_dir))
+            
+            print(f"Pipeline complete. All core metrics tracking {base_name} preserved in \'{str(self.output_dir)}/\'.")
+            return self.vertices, self.faces
+            
+        except Exception as e:
+            raise AsteroidModelError(f"Pipeline execution failed: {e}") from e
+
+    def plot_lightcurves_results(self, save: bool = False, show: bool = True, max_curves: int = 3):
+        """
+        Wrapper to immediately visualize the modeled output against the provided native DataFrame
+        using the standalone plot_lightcurves integration.
+        """
+        base_name = self.asteroid_name.replace(' ', '_')
+        actual_output_lc = str(self.output_dir / f"{base_name}_lc_output.csv")
+        save_path = str(self.output_dir / f"{base_name}_lightcurves.png") if save else None
+        
+        print(f"Plotting lightcurves...")
+        plot_lightcurves(self.lightcurves, actual_output_lc, save_path=save_path, show=show, max_curves=max_curves)
+        
+    def plot_model(self, save: bool = False, show: bool = True):
+        """Visualizes the internal 3D model footprint using Matplotlib."""
+        if self.vertices is None or self.faces is None:
+            raise AsteroidModelError("3D Model not yet generated. Run run_inversion() first.")
+            
+        base_name = self.asteroid_name.replace(' ', '_')
+        save_path = str(self.output_dir / f"{base_name}_model.png") if save else None
+        
+        plot_model(self.vertices, self.faces, save_path=save_path, show=show)
+        
+    def plot_model_plotly(self, save: bool = False, show: bool = True):
+        """Visualizes the internal 3D model footprint using interactive Plotly HTML."""
+        if self.vertices is None or self.faces is None:
+            raise AsteroidModelError("3D Model not yet generated. Run run_inversion() first.")
+            
+        base_name = self.asteroid_name.replace(' ', '_')
+        save_path = str(self.output_dir / f"{base_name}_model.html") if save else None
+        
+        plot_model_plotly(self.vertices, self.faces, save_path=save_path, show=show)
+        
+    def export_obj(self):
+        """Exports the internal 3D representation to a standard Wavefront (.obj) file."""
+        if self.vertices is None or self.faces is None:
+            raise AsteroidModelError("3D Model not yet generated. Run run_inversion() first.")
+            
+        base_name = self.asteroid_name.replace(' ', '_')
+        save_path = str(self.output_dir / f"{base_name}.obj")
+        
+        save_model_obj(self.vertices, self.faces, save_path)
+        print(f"Model successfully exported to {save_path}")
+        
 def run_convexinv(param_file: str, lightcurve_file: str, output_areas_file: str, output_lc_file: str) -> None:
     """
     Run the convexinv binary to generate face areas and normals from light curves.

@@ -60,25 +60,33 @@ Here's an example script to run your first inversion:
 
 ```python
 import pymit
+import json
 
 # Path to your CSV file containing lightcurves
 lcs_csv = "my_lightcurves.csv"
 
+# Instantiate the modeler
+modeler = pymit.AsteroidModeler(asteroid_name="MyAsteroid", output_dir="pipeline_output")
+
+# Load your lightcurves
+modeler.load_lightcurves(lcs_csv)
+
+# Configure the inversion step dynamically via a python dictionary
+inv_config = {
+    'initial_period': 5.76198, # Provide initial period estimate in hours
+    'convexity_regularization': 0.1,
+    'spherical_harmonics_degree': 6,
+    'iteration_stop_condition': 25
+}
+modeler.load_parameters(inversion_json=json.dumps(inv_config))
+
 # Run the complete inversion pipeline
-vertices, faces = pymit.run_pipeline(
-    lightcurve=lcs_csv, 
-    inversion_options={
-        'initial_period': 5.76198, # Provide initial period estimate in hours
-        'convexity_regularization': 0.1,
-        'spherical_harmonics_degree': 6,
-        'iteration_stop_condition': 25
-    },
-    plot_file=True,     # Generate a static 3D plot image
-    obj_file=True,      # Export a 3D .obj model
-    plotly_file=True,   # Export an interactive HTML 3D visualization
-    output_dir="pipeline_output", # Folder to store generated files
-    asteroid_name="MyAsteroid"    # Prefix for generated files
-)
+vertices, faces = modeler.run_inversion()
+
+# Plot and generate outputs
+modeler.plot_model(show=False, save_path="pipeline_output/MyAsteroid_model.png")
+modeler.export_obj(file_path="pipeline_output/MyAsteroid_model.obj")
+modeler.plot_model_plotly(show=False, save_path="pipeline_output/MyAsteroid_model.html")
 
 print(f"Success! Reconstructed an asteroid shape with {len(vertices)} vertices and {len(faces)} faces.")
 ```

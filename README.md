@@ -33,15 +33,30 @@ If you already have your data prepared and compiled the executables, here's a mi
 
 ```python
 import pymit
+import json
 
-vertices, faces = pymit.run_pipeline(
-    lightcurve="test_lcs.csv", 
-    inversion_options={'initial_period': 5.76198},
-    conjgradinv_options={'number_of_iterations': 150},
-    plot_file=True,
-    plot_lcs_file=True,
-    asteroid_name="Eros"
-)
+# Instantiate the modeler
+modeler = pymit.AsteroidModeler(asteroid_name="Eros", output_dir="data")
+
+# Load lightcurves
+modeler.load_lightcurves("test_lcs.csv")
+
+# Configure inversion parameters using a JSON configuration
+inv_config = {
+    "initial_period": 5.76198
+}
+conj_config = {
+    "number_of_iterations": 150
+}
+modeler.load_parameters(inversion_json=json.dumps(inv_config), conjgradinv_json=json.dumps(conj_config))
+
+# Run inversion
+vertices, faces = modeler.run_inversion()
+
+# Plot and export results
+modeler.plot_lightcurves_results(max_curves=3, show=True)
+modeler.plot_model(show=True)
+
 print(f"Generated an asteroid model with {len(vertices)} vertices and {len(faces)} faces.")
 ```
 

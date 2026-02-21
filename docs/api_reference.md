@@ -2,71 +2,53 @@
 
 This document provides detailed information about the functions available in the `asteroid_modeling` module. For an introduction and installation instructions, see the main [README.md](../README.md).
 
-## Core Functions
+## Core Classes
 
-### `run_pipeline`
-The core function to execute the full end-to-end pipeline.
+### `AsteroidModeler`
+The main class to handle data state, configuration parameters, and the execution of the full end-to-end pipeline.
 
 ```python
-def run_pipeline(
-    lightcurve: Union[str, pd.DataFrame], 
-    output_areas_file: str = None, 
-    output_lc_file: str = None, 
-    plot_file: Union[str, bool] = None,
-    obj_file: Union[str, bool] = None,
-    plotly_file: Union[str, bool] = None,
-    plot_lcs_file: Union[str, bool] = None,
-    output_dir: str = None,
-    asteroid_name: str = None,
-    param_file: str = None,
-    inversion_options: dict = None,
-    conjgradinv_options: dict = None
-) -> tuple[np.ndarray, list[list[int]]]:
+class AsteroidModeler:
+    def __init__(self, asteroid_name: str = "asteroid", output_dir: str = "."):
 ```
+Initializes the modeler instance.
+-   `asteroid_name` (str): The name used as a prefix for saved output files. Defaults to "asteroid".
+-   `output_dir` (str): Directory where outputs are saved. Created if it doesn't exist. Defaults to current directory.
 
-**Arguments:**
--   `lightcurve` (str or pd.DataFrame): Path to the observed light curves data file (txt or csv) OR a `pandas.DataFrame`. If a `.csv` file or `DataFrame` is provided, it is automatically converted into the target text format before execution. The expected columns are `jd`, `brightness`, `sun_x`, `sun_y`, `sun_z`, `earth_x`, `earth_y`, `earth_z`, with optional `curve_id` and `is_relative` logic mapping lines into distinct light curves.
--   `output_areas_file` (str, optional): Path where the intermediate output containing areas and normals will be saved. Defaults to `{asteroid_name}_areas.txt` if `asteroid_name` is provided, otherwise `output_areas.txt`.
--   `output_lc_file` (str, optional): Path where the modeled (fitted) light curves will be output. Defaults to `{asteroid_name}_lcs.txt` if string formatting is leveraged, otherwise `output_lcs.txt`.
--   `plot_file` (str or bool, optional): If provided as a string, saves a static matplotlib visualization to this given filename. If `True`, generates a default `{asteroid_name}_model.png`.
--   `obj_file` (str or bool, optional): If provided as a string, saves the exact 3D polygon shape to a standard Wavefront `.obj`. If `True`, generates a default `.obj` file.
--   `plotly_file` (str or bool, optional): If provided as a string, saves an interactive HTML 3D visualization. If `True`, generates a default `.html` template based on the asteroid.
--   `plot_lcs_file` (str or bool, optional): If provided as a string, saves a scatter plot of the observed vs modeled light curves. If `True`, generates a default `{asteroid_name}_lightcurves.png`.
--   `output_dir` (str, optional): A directory where all the specified outputs (`output_areas_file`, `output_lc_file`, plots, and models) will be saved. If it doesn't exist, it will be created. If not provided, it saves to the current working directory.
--   `asteroid_name` (str, optional): Used to dynamically fill output filenames if no strict path is provided. Defaults to "asteroid".
--   `param_file` (str, optional): Path to the `input_convexinv` configuration file. This file contains parameters like initial period, regularizations, and iteration limits.
--   `inversion_options` (dict, optional): Overrides individual numerical tuning flags to construct the `input_convexinv` file dynamically during execution, bypassing the need for an existing text file block. Example dictionary keys:
-    - `'initial_lambda'` (float, default 220): Initial lambda [deg].
-    - `'initial_lambda_fixed'` (int, default 1): 0/1 fixed/free.
-    - `'initial_beta'` (float, default 0): Initial beta [deg].
-    - `'initial_beta_fixed'` (int, default 1): 0/1 fixed/free.
-    - `'initial_period'` (float, default 5.76198): The starting rotational period estimate in **hours**.
-    - `'initial_period_fixed'` (int, default 1): 0/1 fixed/free.
-    - `'zero_time'` (float, default 0): Zero time [JD].
-    - `'initial_rotation_angle'` (float, default 0): Initial rotation angle [deg].
-    - `'convexity_regularization'` (float, default 0.1): Convexity regularization parameter.
-    - `'spherical_harmonics_degree'` (int, default 6): Degree of spherical harmonics expansion.
-    - `'spherical_harmonics_order'` (int, default 6): Order of spherical harmonics expansion.
-    - `'number_of_rows'` (int, default 8): Number of rows.
-    - `'phase_func_a'` (float, default 0.5): Phase funct. param. 'a'.
-    - `'phase_func_a_fixed'` (int, default 0): 0/1 fixed/free.
-    - `'phase_func_d'` (float, default 0.1): Phase funct. param. 'd'.
-    - `'phase_func_d_fixed'` (int, default 0): 0/1 fixed/free.
-    - `'phase_func_k'` (float, default -0.5): Phase funct. param. 'k'.
-    - `'phase_func_k_fixed'` (int, default 0): 0/1 fixed/free.
-    - `'lambert_c'` (float, default 0.1): Lambert coefficient 'c'.
-    - `'lambert_c_fixed'` (int, default 0): 0/1 fixed/free.
-    - `'iteration_stop_condition'` (int, default 50): Iteration stop condition.
--   `conjgradinv_options` (dict, optional): Provides settings to construct the `input_conjgradinv` file required by the underlying Minkowski reconstruction phase. Allowed keys:
-    - `'convexity_weight'` (float, default 0.2)
-    - `'number_of_rows'` (int, default 8)
-    - `'number_of_iterations'` (int, default 100)
-    
-**(Note: You must provide either an existing `param_file` path OR an `inversion_options` configurations dictionary)**
+#### `load_lightcurves`
+```python
+    def load_lightcurves(self, source: Union[str, pd.DataFrame]) -> None:
+```
+Loads lightcurves into the modeler.
+-   `source` (str or pd.DataFrame): Path to the observed light curves data file (`.csv` or `.txt` LCS format) OR a `pandas.DataFrame`.
 
+#### `load_parameters`
+```python
+    def load_parameters(
+        self,
+        inversion_json: Union[str, dict] = None,
+        conjgradinv_json: Union[str, dict] = None
+    ) -> None:
+```
+Loads inversion and shape construction options.
+-   `inversion_json` (str or dict, optional): Configuration for the convex inversion step (`input_convexinv`). Can be a JSON file path, JSON string, or a dictionary. 
+    Examples of keys: `'initial_period'`, `'convexity_regularization'`, `'iteration_stop_condition'`.
+-   `conjgradinv_json` (str or dict, optional): Configuration for the shape reconstruction step (`input_conjgradinv`).
+
+#### `run_inversion`
+```python
+    def run_inversion(self) -> tuple[np.ndarray, list[list[int]]]:
+```
+Executes the shape reconstruction using the loaded lightcurves and parameters.
 **Returns:**
--   `vertices` (np.ndarray): A numpy array of shape `(N, 3)` containing the X, Y, Z coordinates of the asteroid's vertices.
+-   `vertices` (np.ndarray): A numpy array of shape `(N, 3)` containing the X, Y, Z coordinates.
 -   `faces` (list[list[int]]): A list where each element is a face, defined by a list of 1-based vertex indices.
+
+#### Shape and Plot Utils (Object Methods)
+-   `plot_lightcurves_results(max_curves=3, show=True, save_path=None)`: Plots observed vs modeled lightcurves.
+-   `plot_model(show=True, save_path=None)`: Renders the 3D shape using matplotlib.
+-   `plot_model_plotly(show=True, save_path=None)`: Renders the 3D shape as an interactive HTML file.
+-   `export_obj(file_path=None)`: Exports the shape to a `.obj` file.
 
 ---
 
