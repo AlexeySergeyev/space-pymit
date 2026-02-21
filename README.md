@@ -10,6 +10,7 @@ The module also provides a built-in visualization function using `matplotlib` to
 ## Prerequisites
 To use this module, you must have the following installed:
 -   `numpy`
+-   `pandas` (for DataFrame lightcurve support)
 -   `matplotlib`
 -   `plotly` (for interactive 3D rendering)
 -   Compiled executables for `convexinv` and `minkowski` in the `damit` folder. 
@@ -18,7 +19,7 @@ To use this module, you must have the following installed:
 
 You can install the Python dependencies via pip:
 ```bash
-pip install numpy matplotlib plotly
+pip install numpy pandas matplotlib plotly
 ```
 
 ### Quick Links
@@ -34,10 +35,11 @@ If you already have your data prepared and compiled the executables, here's a mi
 import pymit
 
 vertices, faces = pymit.run_pipeline(
-    param_file=None, 
-    lightcurve_file="test_lcs.csv", 
+    lightcurve="test_lcs.csv", 
     inversion_options={'initial_period': 5.76198},
+    conjgradinv_options={'number_of_iterations': 150},
     plot_file=True,
+    plot_lcs_file=True,
     asteroid_name="Eros"
 )
 print(f"Generated an asteroid model with {len(vertices)} vertices and {len(faces)} faces.")

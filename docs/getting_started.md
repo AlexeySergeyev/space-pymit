@@ -66,8 +66,7 @@ lcs_csv = "my_lightcurves.csv"
 
 # Run the complete inversion pipeline
 vertices, faces = pymit.run_pipeline(
-    param_file=None, # We'll use programmatic options instead of a text file
-    lightcurve_file=lcs_csv, 
+    lightcurve=lcs_csv, 
     inversion_options={
         'initial_period': 5.76198, # Provide initial period estimate in hours
         'convexity_regularization': 0.1,

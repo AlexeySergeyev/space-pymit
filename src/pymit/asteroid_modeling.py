@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 from typing import Union
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import plotly.graph_objects as go
@@ -52,12 +53,13 @@ def run_convexinv(param_file: str, lightcurve_file: str, output_areas_file: str,
             raise AsteroidModelError(f"convexinv failed with return code {e.returncode}.\nStderr: {e.stderr}") from e
 
 
-def run_minkowski(areas_normals_file: str) -> tuple[np.ndarray, list[list[int]]]:
+def run_minkowski(areas_normals_file: str, pwd_dir: Union[str, Path] = None) -> tuple[np.ndarray, list[list[int]]]:
     """
     Run the minkowski binary to reconstruct a 3D shape from face areas and normals.
     
     Args:
         areas_normals_file (str): Path to the file containing face areas and normals (output from convexinv).
+        pwd_dir (str or Path): The working directory to run the process in (so it finds local param files).
         
     Returns:
         tuple[np.ndarray, list[list[int]]]: 
@@ -70,7 +72,12 @@ def run_minkowski(areas_normals_file: str) -> tuple[np.ndarray, list[list[int]]]
     with open(areas_normals_file, 'rb') as f_in:
         try:
             # The minkowski code writes to stdout and uses stdin.
-            result = subprocess.run([str(MINKOWSKI_EXEC)], stdin=f_in, capture_output=True, text=True, check=True)
+            # If pwd_dir is specified, run the subprocess from there so relative internal dependencies (like input_conjgradinv) resolve properly
+            run_opts = {}
+            if pwd_dir:
+                run_opts['cwd'] = str(pwd_dir)
+                
+            result = subprocess.run([str(MINKOWSKI_EXEC)], stdin=f_in, capture_output=True, text=True, check=True, **run_opts)
         except subprocess.CalledProcessError as e:
             raise AsteroidModelError(f"minkowski failed with return code {e.returncode}.\nStderr: {e.stderr}") from e
     
@@ -321,6 +328,117 @@ def plot_model_plotly(vertices: np.ndarray, faces: list[list[int]], save_path: s
     if show:
         fig.show()
 
+def plot_lightcurves(lightcurve: Union[str, pd.DataFrame], output_file: str, save_path: str = None, show: bool = True, max_curves: int = 3) -> None:
+    """
+    Plot observed vs modeled light curves.
+    
+    Args:
+        lightcurve: Path to the input light curves file (text format or .csv) or a pandas DataFrame.
+        output_file: Path to the modeled light curves file output from convexinv.
+        save_path: Optional path to save the plot.
+        show: Whether to display the plot interactively.
+        max_curves: Maximum number of curves to plot to avoid clutter.
+    """
+    
+    temp_input = None
+    if isinstance(lightcurve, pd.DataFrame):
+        temp_input = "temp_plot_lcs_input.txt"
+        dataframe_to_lcs_format(lightcurve, temp_input)
+        actual_input_file = temp_input
+    elif isinstance(lightcurve, str) and lightcurve.lower().endswith('.csv'):
+        temp_input = "temp_plot_lcs_input.txt"
+        csv_to_lcs_format(lightcurve, temp_input)
+        actual_input_file = temp_input
+    else:
+        actual_input_file = lightcurve
+        
+    try:
+        with open(actual_input_file, 'r') as f_in, open(output_file, 'r') as f_out:
+            n_curves = int(f_in.readline().strip())
+            
+            plt.figure(figsize=(10, 6))
+            
+            for i in range(n_curves):
+                header = f_in.readline().split()
+                n_pts = int(header[0])
+                
+                x = []
+                y_obs = []
+                y_mod = []
+                
+                for _ in range(n_pts):
+                    parts = f_in.readline().split()
+                    if not x:
+                        t0 = float(parts[0])
+                    x.append(float(parts[0]) - t0)
+                    y_obs.append(float(parts[1]))
+                    y_mod.append(float(f_out.readline().strip()))
+                
+                if i < max_curves:
+                    plt.plot(x, y_obs, 'o', label=f'Observed Curve {i+1}')
+                    plt.plot(x, y_mod, '-', label=f'Modeled Curve {i+1}')
+                    
+            plt.xlabel('Time (Days from curve start)')
+            plt.ylabel('Brightness')
+            plt.title('Observed vs Modeled Light Curves (Sample)')
+            plt.legend()
+            
+            if save_path:
+                plt.savefig(save_path, dpi=150, bbox_inches='tight')
+                
+            if show:
+                plt.show()
+                
+            plt.close()
+    finally:
+        if temp_input and Path(temp_input).exists():
+            Path(temp_input).unlink()
+
+def dataframe_to_lcs_format(df: pd.DataFrame, output_file: str) -> None:
+    """
+    Convert a pandas DataFrame containing light curve data into the text format 
+    expected by the convexinv executable.
+    
+    Expected DataFrame Columns:
+    - jd (float)
+    - brightness (float)
+    - sun_x (float)
+    - sun_y (float)
+    - sun_z (float)
+    - earth_x (float)
+    - earth_y (float)
+    - earth_z (float)
+    Optional columns:
+    - curve_id (int/str): To group rows into separate light curves. Default is all same curve.
+    - is_relative (int): 0 for absolute, 1 for relative. Default is 0.
+    """
+    curves = {}
+    
+    # Ensure required columns exist
+    required_cols = ['jd', 'brightness', 'sun_x', 'sun_y', 'sun_z', 'earth_x', 'earth_y', 'earth_z']
+    for col in required_cols:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column in DataFrame: {col}")
+            
+    for row_idx, row in df.iterrows():
+        try:
+            jd = float(row['jd'])
+            bright = float(row['brightness'])
+            sx, sy, sz = float(row['sun_x']), float(row['sun_y']), float(row['sun_z'])
+            ex, ey, ez = float(row['earth_x']), float(row['earth_y']), float(row['earth_z'])
+        except ValueError as e:
+            raise ValueError(f"Invalid data format in DataFrame row {row_idx}: {e}")
+            
+        cid = str(row.get('curve_id', '1'))
+        is_rel = int(row.get('is_relative', 0))
+        
+        if cid not in curves:
+            curves[cid] = {'is_relative': is_rel, 'points': []}
+            
+        curves[cid]['points'].append((jd, bright, sx, sy, sz, ex, ey, ez))
+        
+    _write_lcs_dict_to_file(curves, output_file)
+
 def csv_to_lcs_format(csv_file: str, output_file: str) -> None:
     """
     Convert a standard CSV file containing light curve data into the text format 
@@ -362,6 +480,9 @@ def csv_to_lcs_format(csv_file: str, output_file: str) -> None:
                 
             curves[cid]['points'].append((jd, bright, sx, sy, sz, ex, ey, ez))
             
+    _write_lcs_dict_to_file(curves, output_file)
+
+def _write_lcs_dict_to_file(curves: dict, output_file: str) -> None:
     with open(output_file, 'w') as f_out:
         # Write total number of curves
         f_out.write(f"{len(curves)}\n")
@@ -439,24 +560,53 @@ def create_convexinv_param_file(options: dict, output_file: str) -> None:
     with open(output_file, 'w') as f:
         f.write("\n".join(lines) + "\n")
 
+def create_conjgradinv_param_file(options: dict, output_file: str) -> None:
+    """
+    Programmatically create the conjgradinv parameter file used by Minkowski.
+    
+    Args:
+        options (dict): A dictionary overriding default settings.
+        output_file (str): Path to write the text file payload.
+    """
+    
+    defaults = {
+        'convexity_weight': 0.2,
+        'number_of_rows': 8,
+        'number_of_iterations': 100
+    }
+    
+    opts = {**defaults, **(options or {})}
+    
+    lines = [
+        f"{opts['convexity_weight']}\t\t\tconvexity weight",
+        f"{opts['number_of_rows']}\t\t\tnumber of rows",
+        f"{opts['number_of_iterations']}\t\t\tnumber of iterations"
+    ]
+    
+    with open(output_file, 'w') as f:
+        f.write("\n".join(lines) + "\n")
 
-def run_pipeline(param_file: str = None, lightcurve_file: str = None, output_areas_file: str = None, output_lc_file: str = None, 
+
+def run_pipeline(lightcurve: Union[str, pd.DataFrame], output_areas_file: str = None, output_lc_file: str = None, 
                  plot_file: Union[str, bool] = None, obj_file: Union[str, bool] = None, plotly_file: Union[str, bool] = None, 
-                 output_dir: str = None, asteroid_name: str = None, inversion_options: dict = None) -> tuple[np.ndarray, list[list[int]]]:
+                 plot_lcs_file: Union[str, bool] = None, output_dir: str = None, asteroid_name: str = None, 
+                 param_file: str = None, inversion_options: dict = None, conjgradinv_options: dict = None) -> tuple[np.ndarray, list[list[int]]]:
     """
     Run the full pipeline: compute areas from light curves, reconstruct 3D shape, and visualize.
     
     Args:
-        param_file: Path to convexinv input parameters file.
-        lightcurve_file: Path to light curves data (txt or csv).
+        lightcurve: Path to light curves data (txt or csv), or a pandas DataFrame.
         output_areas_file: Filename to save intermediate areas data. Defaults to '{asteroid_name}_areas.txt'.
         output_lc_file: Filename to save modeled light curves. Defaults to '{asteroid_name}_lcs.txt'.
         plot_file: Name/path for static image plot. Pass True to generate the default '{asteroid_name}_model.png'.
         obj_file: Name/path for exported OBJ model. Pass True to generate the default '{asteroid_name}_model.obj'.
         plotly_file: Name/path for interactive HTML plot. Pass True to generate the default '{asteroid_name}_model.html'.
+        plot_lcs_file: Name/path for lightcurves scatter plot. Pass True to generate the default '{asteroid_name}_lightcurves.png'.
         output_dir: Directory to save all generated output files. If None, saves to current directory.
         asteroid_name: Optional name prefix for output files. Defaults to 'asteroid'.
-        inversion_options: Optional dictionary of overrides to programmatically generate the `input_convexinv` parameter file. If passed, `param_file` will be ignored/overwritten.
+        param_file: Path to convexinv input parameters file.
+        inversion_options: Optional dictionary of overrides to programmatically generate the `input_convexinv` parameter file. If passed, `param_file` will be ignored/overwritten. Example unit: `'initial_period'` assumes **hours**.
+        conjgradinv_options: Optional dictionary of overrides to programmatically generate the `input_conjgradinv` parameter file expected by minkowski.
     """
     base_name = asteroid_name if asteroid_name else "asteroid"
     
@@ -480,6 +630,11 @@ def run_pipeline(param_file: str = None, lightcurve_file: str = None, output_are
         plotly_file = f"{base_name}_model.html"
     elif plotly_file is False:
         plotly_file = None
+        
+    if plot_lcs_file is True:
+        plot_lcs_file = f"{base_name}_lightcurves.png"
+    elif plot_lcs_file is False:
+        plot_lcs_file = None
 
     # Set up output directory
     out_dir = Path(output_dir) if output_dir else Path('.')
@@ -488,10 +643,11 @@ def run_pipeline(param_file: str = None, lightcurve_file: str = None, output_are
         
     actual_output_areas = str(out_dir / output_areas_file)
     actual_output_lc = str(out_dir / output_lc_file)
-    actual_lightcurve_file = lightcurve_file
+    actual_lightcurve_file = lightcurve if isinstance(lightcurve, str) else None
     
     tmp_lcs_file = None
     tmp_param_file = None
+    tmp_conj_file = None
     
     # Handle dictionary configs for convexinv
     if inversion_options is not None:
@@ -501,46 +657,61 @@ def run_pipeline(param_file: str = None, lightcurve_file: str = None, output_are
         param_file = tmp_param_file
     elif not param_file:
         raise ValueError("Must provide either a 'param_file' path or 'inversion_options' dict.")
+        
+    # Handle dictionary configs for conjgradinv
+    if conjgradinv_options is not None:
+        print("Generating dynamic input_conjgradinv settings...")
+        # The Fortran executable rigidly looks for literally 'input_conjgradinv' in its working directory.
+        tmp_conj_file = str(out_dir / "input_conjgradinv")
+        create_conjgradinv_param_file(conjgradinv_options, tmp_conj_file)
     
-    if lightcurve_file.lower().endswith('.csv'):
-        print(f"Converting CSV input {lightcurve_file} to convexinv text format...")
-        tmp_lcs_file = str(Path(lightcurve_file).with_suffix('.txt'))
-        csv_to_lcs_format(lightcurve_file, tmp_lcs_file)
+    if isinstance(lightcurve, pd.DataFrame):
+        print(f"Converting DataFrame input to convexinv text format...")
+        tmp_lcs_file = str(out_dir / f"{base_name}_lcs_input.txt")
+        dataframe_to_lcs_format(lightcurve, tmp_lcs_file)
+        actual_lightcurve_file = tmp_lcs_file
+    elif isinstance(lightcurve, str) and lightcurve.lower().endswith('.csv'):
+        print(f"Converting CSV input {lightcurve} to convexinv text format...")
+        # Drop the original directory path, keep filename, change extension to .txt, map to output directory
+        filename = Path(lightcurve).with_suffix('.txt').name
+        tmp_lcs_file = str(out_dir / filename)
+        csv_to_lcs_format(lightcurve, tmp_lcs_file)
         actual_lightcurve_file = tmp_lcs_file
         
-    print("Running convexinv... (this might take a few moments)")
     try:
+        print("Running convexinv... (this might take a few moments)")
         run_convexinv(param_file, actual_lightcurve_file, actual_output_areas, actual_output_lc)
         print("convexinv complete.")
-    finally:
-        # Cleanup temporary files if we created them
-        if tmp_lcs_file and Path(tmp_lcs_file).exists() and tmp_lcs_file != lightcurve_file:
-            print(f"Cleaning up temporary lightcurves file {tmp_lcs_file}...")
-            Path(tmp_lcs_file).unlink()
-        if tmp_param_file and Path(tmp_param_file).exists():
-            print(f"Cleaning up temporary param file {tmp_param_file}...")
-            Path(tmp_param_file).unlink()
+        
+        print("Running minkowski 3D reconstruction...")
+        vertices, faces = run_minkowski(actual_output_areas, pwd_dir=out_dir if tmp_conj_file else None)
+        print(f"Reconstruction complete: {len(vertices)} vertices, {len(faces)} faces.")
+        
+        if obj_file:
+            actual_obj = str(out_dir / obj_file)
+            print(f"Saving 3D model to {actual_obj}...")
+            save_model_obj(vertices, faces, save_path=actual_obj)
+        
+        if plot_file:
+            actual_plot = str(out_dir / plot_file)
+            print(f"Plotting matplotlib model to {actual_plot}...")
+            plot_model(vertices, faces, save_path=actual_plot, show=False)
             
-    print("Running minkowski 3D reconstruction...")
-    vertices, faces = run_minkowski(actual_output_areas)
-    print(f"Reconstruction complete: {len(vertices)} vertices, {len(faces)} faces.")
-    
-    if obj_file:
-        actual_obj = str(out_dir / obj_file)
-        print(f"Saving 3D model to {actual_obj}...")
-        save_model_obj(vertices, faces, save_path=actual_obj)
-    
-    if plot_file:
-        actual_plot = str(out_dir / plot_file)
-        print(f"Plotting matplotlib model to {actual_plot}...")
-        plot_model(vertices, faces, save_path=actual_plot, show=False)
+        if plotly_file:
+            actual_plotly = str(out_dir / plotly_file)
+            print(f"Generating interactive plotly model to {actual_plotly}...")
+            plot_model_plotly(vertices, faces, save_path=actual_plotly, show=False)
+            
+        if plot_lcs_file:
+            actual_plot_lcs = str(out_dir / plot_lcs_file)
+            print(f"Plotting lightcurves to {actual_plot_lcs}...")
+            plot_lightcurves(actual_lightcurve_file, actual_output_lc, save_path=actual_plot_lcs, show=False)
+            
+        print(f"All intermediate files preserved in '{out_dir}/'.")
+        return vertices, faces
         
-    if plotly_file:
-        actual_plotly = str(out_dir / plotly_file)
-        print(f"Generating interactive plotly model to {actual_plotly}...")
-        plot_model_plotly(vertices, faces, save_path=actual_plotly, show=False)
-        
-    return vertices, faces
+    except Exception as e:
+        raise AsteroidModelError(f"Pipeline execution failed: {e}") from e
 
 if __name__ == "__main__":
     # Example test run if executed directly
@@ -549,14 +720,34 @@ if __name__ == "__main__":
     lcs_txt = DAMIT_DIR / "test_lcs_abs"
     
     if param_txt.exists() and lcs_txt.exists():
+        print("Testing file-based pipeline execution:")
         run_pipeline(
-            param_file=str(param_txt), 
-            lightcurve_file=str(lcs_txt), 
+            lightcurve=str(lcs_txt), 
             plot_file=True,
             obj_file=True,
             plotly_file=True,
+            plot_lcs_file=True,
             output_dir="pipeline_output",
-            asteroid_name="test_asteroid"
+            asteroid_name="test_asteroid",
+            param_file=str(param_txt),
+            conjgradinv_options={'number_of_iterations': 150}
         )
+        
+        # Test dataframe loading logic by simulating a CSV read and converting to dataframe then running
+        test_csv = PROJECT_ROOT / "pipeline_output" / "test.csv"
+        if test_csv.exists():
+            print("\nTesting DataFrame-based pipeline execution:")
+            import pandas as pd
+            df = pd.read_csv(str(test_csv))
+            run_pipeline(
+                lightcurve=df, 
+                plot_file=False,
+                obj_file=False,
+                plotly_file=False,
+                plot_lcs_file=False,
+                output_dir="pipeline_output",
+                asteroid_name="test_asteroid_df",
+                param_file=str(param_txt)
+            )
     else:
         print("Example data files not found. Please provide them to test the pipeline.")

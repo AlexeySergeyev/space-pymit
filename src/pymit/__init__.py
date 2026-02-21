@@ -6,7 +6,11 @@ from .asteroid_modeling import (
     save_model_obj,
     plot_model,
     plot_model_plotly,
+    plot_lightcurves,
     csv_to_lcs_format,
+    dataframe_to_lcs_format,
+    create_convexinv_param_file,
+    create_conjgradinv_param_file,
     AsteroidModelError
 )
 
@@ -18,6 +22,10 @@ __all__ = [
     'save_model_obj',
     'plot_model',
     'plot_model_plotly',
+    'plot_lightcurves',
     'csv_to_lcs_format',
+    'dataframe_to_lcs_format',
+    'create_convexinv_param_file',
+    'create_conjgradinv_param_file',
     'AsteroidModelError'
 ]
