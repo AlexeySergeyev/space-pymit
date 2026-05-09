@@ -4,3 +4,6 @@ matplotlib
 plotly
 nbformat>=4.2.0
 ipywidgets
+certifi
+requests
+streamlit

@@ -14,3 +14,6 @@ venv.bak/
 
 # macOS
 .DS_Store
+
+src/pymit.egg-info/
+.pytest_cache/
