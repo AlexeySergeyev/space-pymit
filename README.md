@@ -5,7 +5,7 @@ The `asteroid_modeling.py` module provides a Python orchestration layer to autom
 1.  **convexinv (C)**: Computes the Gaussian image of the asteroid (face areas and normals) from observed light curves.
 2.  **minkowski (Fortran)**: Reconstructs the 3D vertices and polygonal faces from the areas and normals using Minkowski's theorem.
 
-The module also provides a built-in visualization function using `matplotlib` to render the resulting 3D shape.
+The package also provides plotting helpers, interactive Plotly output, sky projection products, synthetic lightcurves, and a local Streamlit GUI for running the workflow from a browser.
 
 ## Prerequisites
 To use this module, you must have the following installed:
@@ -13,13 +13,15 @@ To use this module, you must have the following installed:
 -   `pandas` (for DataFrame lightcurve support)
 -   `matplotlib`
 -   `plotly` (for interactive 3D rendering)
+-   `requests` (for DAMIT URL downloads)
+-   `streamlit` (for the local GUI)
 -   Compiled executables for `convexinv` and `minkowski` in the `damit` folder. 
 
 - The source code for DAMIT can be downloaded from: [https://damit.cuni.cz/projects/damit/files/version_0.2.1.tar.gz](https://damit.cuni.cz/projects/damit/files/version_0.2.1.tar.gz).
 
 You can install the Python dependencies via pip:
 ```bash
-pip install numpy pandas matplotlib plotly
+pip install numpy pandas matplotlib plotly requests streamlit
 ```
 
 ### Quick Links
@@ -33,36 +35,75 @@ If you already have your data prepared and compiled the executables, here's a mi
 
 ```python
 import pymit
-import json
 
 # Instantiate the modeler
-modeler = pymit.AsteroidModeler(asteroid_name="Eros", output_dir="data")
+modeler = pymit.AsteroidModeler(asteroid_name="A7753", output_dir="data")
 
-# Load lightcurves
-modeler.load_lightcurves("test_lcs.csv")
+# Load a CSV, native DAMIT/convexinv text file, or DAMIT plaintext URL
+modeler.load_lightcurves(
+    "https://damit.cuni.cz/projects/damit/LightCurves/"
+    "exportAllForAsteroid/7753/plaintext/A7753.lc.txt"
+)
 
-# Configure inversion parameters using a JSON configuration
+# Configure inversion parameters
 inv_config = {
-    "initial_period": 5.76198
+    "initial_lambda": 269.0,
+    "initial_lambda_fixed": 1,
+    "initial_beta": 62.0,
+    "initial_beta_fixed": 1,
+    "initial_period": 33.0,
+    "initial_period_fixed": 1,
+    "phase_func_c": 0.1,
+    "phase_func_c_fixed": 0,
+    "phase_func_a": 0.5,
+    "phase_func_a_fixed": 0,
+    "phase_func_d": 0.1,
+    "phase_func_d_fixed": 0,
+    "phase_func_k": -1.05,
+    "phase_func_k_fixed": 0,
 }
 conj_config = {
-    "number_of_iterations": 150
+    "number_of_iterations": 100
 }
-modeler.load_parameters(inversion_json=json.dumps(inv_config), conjgradinv_json=json.dumps(conj_config))
+modeler.load_parameters(inversion_json=inv_config, conjgradinv_json=conj_config)
 
 # Run inversion
 vertices, faces = modeler.run_inversion()
 
 # Plot and export results
-modeler.plot_lightcurves_results(max_curves=3, show=True)
-modeler.plot_model(show=True)
+modeler.plot_lightcurves_results(save=True, show=False, max_curves=3)
+modeler.plot_model(save=True, show=False)
+modeler.plot_model_plotly(save=True, show=False)
+modeler.plot_sky_projection(save=True, show=False, jd=2461169.0)
+modeler.plot_synthetic_lightcurve(save=True, show=False, jd=2461169.0)
+modeler.export_obj()
 
 print(f"Generated an asteroid model with {len(vertices)} vertices and {len(faces)} faces.")
 ```
 
 **Modeled output examples:**
 ![Modeled Light Curves](docs/assets/lightcurves.png)
-![Asteroid 3D Shape Model](docs/assets/shape_model.png)
+![Asteroid 3D Shape Model](docs/assets/sky_projection.png)
+![Synthetic Light Curve](docs/assets/synthetic_lightcurve.png)
+
+## Local Streamlit GUI
+
+Run the browser GUI from the repository root:
+
+```bash
+PYTHONPATH=src streamlit run apps/streamlit_app.py
+```
+![Streamlit GUI](docs/assets/streamlit_gui.png)
+
+
+The GUI supports:
+-   DAMIT plaintext lightcurve URLs
+-   Uploaded CSV or native DAMIT/`convexinv` lightcurve files
+-   Convex inversion, LSL scattering, and Minkowski reconstruction controls
+-   Sky projection and synthetic lightcurve generation for a selected Julian date
+-   Interactive 3D model display and download buttons for generated outputs
+
+Sidebar values are saved to `.pymit_last_params.json` after a successful run and restored on the next GUI start.
 
 ## Error Handling
 The module raises `AsteroidModelError` if the underlying C/Fortran binaries fail or return a non-zero exit code. Ensure that your input parametrization matches the formatting expectations of the Kaasalainen & Torppa inversion codes.
