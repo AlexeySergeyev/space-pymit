@@ -116,7 +116,76 @@ def collect_generated_outputs(output_dir: Path, asteroid_name: str) -> list[Gene
         GeneratedOutput("OBJ model", output_dir / f"{base_name}.obj", "text/plain"),
         GeneratedOutput("Interactive model HTML", output_dir / f"{base_name}_model.html", "text/html"),
         GeneratedOutput("Static model PNG", output_dir / f"{base_name}_model.png", "image/png"),
-        GeneratedOutput("Lightcurve plot PNG", output_dir / f"{base_name}_lightcurves.png", "image/png"),
+        GeneratedOutput(
+            "Lightcurve plot HTML",
+            output_dir / f"{base_name}_lightcurves.html",
+            "text/html",
+        ),
+        GeneratedOutput(
+            "Folded residuals PNG",
+            output_dir / f"{base_name}_lightcurves_folded_residuals.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Period scan results TXT",
+            output_dir / f"{base_name}_period_scan.txt",
+            "text/plain",
+        ),
+        GeneratedOutput(
+            "Period scan results CSV",
+            output_dir / f"{base_name}_period_scan.csv",
+            "text/csv",
+        ),
+        GeneratedOutput(
+            "Period scan plot PNG",
+            output_dir / f"{base_name}_period_scan.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Input period_scan TXT",
+            output_dir / f"{base_name}_input_period_scan.txt",
+            "text/plain",
+        ),
+        GeneratedOutput(
+            "Pole scan results CSV",
+            output_dir / f"{base_name}_pole_scan_results.csv",
+            "text/csv",
+        ),
+        GeneratedOutput(
+            "Pole scan best JSON",
+            output_dir / f"{base_name}_pole_scan_best.json",
+            "application/json",
+        ),
+        GeneratedOutput(
+            "Pole scan map PNG",
+            output_dir / f"{base_name}_pole_scan_map.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Pole scan period map PNG",
+            output_dir / f"{base_name}_pole_scan_map_period.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Pole scan shadow map PNG",
+            output_dir / f"{base_name}_pole_scan_map_shadow_percent.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Pole scan fitted map PNG",
+            output_dir / f"{base_name}_pole_scan_map_fitted.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Pole scan fitted period map PNG",
+            output_dir / f"{base_name}_pole_scan_map_fitted_period.png",
+            "image/png",
+        ),
+        GeneratedOutput(
+            "Pole scan fitted shadow map PNG",
+            output_dir / f"{base_name}_pole_scan_map_fitted_shadow_percent.png",
+            "image/png",
+        ),
         GeneratedOutput("Sky projection PNG", output_dir / f"{base_name}_sky_projection.png", "image/png"),
         GeneratedOutput("Sky projection CSV", output_dir / f"{base_name}_sky_projection.csv", "text/csv"),
         GeneratedOutput("Synthetic lightcurve PNG", output_dir / f"{base_name}_synthetic_lightcurve.png", "image/png"),

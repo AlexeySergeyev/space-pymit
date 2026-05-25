@@ -4,10 +4,28 @@ This document describes the underlying configuration parameters used by the DAMI
 
 ---
 
-## 1. `convexinv` Parameters
+## 1. `period_scan` Parameters
+
+`period_scan` is an optional pre-step that evaluates a period range before the main convex inversion. PyMit can run it from the Streamlit GUI, from `AsteroidModeler.run_period_scan()`, or automatically inside `AsteroidModeler.run_inversion(run_period_scan=True, ...)`.
+
+### **Period Range (`period_start`, `period_end`, `period_interval_coefficient`)**
+*   **Description**: Defines the period interval and sampling coefficient used by DAMIT `period_scan`.
+*   **Impact on Modeling**: The best row, selected by minimum $\chi^2$, is copied into `initial_period` for the subsequent `convexinv` run.
+*   **Precision/Performance**: Wide ranges and small sampling intervals increase runtime. In PyMit, `period_scan_workers > 1` splits the range into contiguous subranges and merges the output before selecting the best period.
+
+### **Low-Resolution Shape Settings**
+*   **Description**: `period_scan` has its own `convexity_weight`, `spherical_harmonics_degree`, `spherical_harmonics_order`, and `number_of_rows` settings.
+*   **Impact on Modeling**: These settings affect the period-search fit, not the final high-resolution inversion unless you separately pass the same values to `convexinv`.
+*   **Precision/Performance**: The Streamlit defaults use lower resolution for the scan than for the final inversion to keep period search practical.
+
+PyMit writes `<asteroid>_period_scan.txt`, `<asteroid>_period_scan.csv`, `<asteroid>_period_scan.png`, and `<asteroid>_period_scan_stdout.log`.
+
+---
+
+## 2. `convexinv` Parameters
 The `convexinv` executable computes a shape, spin, and scattering model that gives the best fit to the input lightcurves. It represents the shape as the Gaussian image of a convex polyhedron.
 
-### **Initial Spin and Period (`initial_pole_lambda`, `initial_pole_beta`, `initial_period`)**
+### **Initial Spin and Period (`initial_lambda`, `initial_beta`, `initial_period`)**
 *   **Description**: The asteroid's initial ecliptic pole coordinates $\lambda, \beta$ (in degrees) and rotation period $P$ (in hours).
 *   **Impact on Modeling**: Defines the starting point for the Levenberg-Marquardt optimizer.
 *   **Precision/Performance**: Since `convexinv` finds a local minimum of $\chi^2$, you must supply an `initial_period` close to the global minimum (often found via a period scan). Incorrect initial periods will lead to divergent or erroneous shape models.
@@ -34,7 +52,7 @@ The `convexinv` executable computes a shape, spin, and scattering model that giv
     *   Running with high values of $n$ increases precision slightly but dramatically inflates `minkowski`'s processing time.
 
 ### **Light Scattering Parameters (`scattering_a`, `d`, `k`, `c`)**
-*   **Description**: Defines the exponential-linear phase function and a mix of Lommel-Seeliger and Lambert scattering laws.
+*   **Description**: Defines the exponential-linear phase function and a mix of Lommel-Seeliger and Lambert scattering laws. In PyMit option names, these are `phase_func_a` (`p2/a`), `phase_func_d` (`p3/d`), `phase_func_k` (`p4/k`), and `phase_func_c` (`p1/c`).
 *   **Impact on Modeling**: Crucial for accurately modeling absolute/calibrated lightcurves containing phase angle variations.
 *   **Precision/Performance**:
     *   If relying **only** on relative lightcurves, no solar phase modeling is needed. Attempting to fit these parameters on relative data often causes the algorithm to diverge. In these cases, use fixed parameters with zero amplitude/slope (e.g., $a=0, d=0, k=0, c=0.1$).
@@ -57,7 +75,7 @@ The `convexinv` executable computes a shape, spin, and scattering model that giv
 
 ---
 
-## 2. `conjgradinv` Parameters
+## 3. `conjgradinv` Parameters
 
 The `conjgradinv` program acts as an analogy to `convexinv` but relies on a Conjugate Gradient method. Crucially, rotation and scattering parameters are **fixed**. It uses the direct facet areas natively as its optimization parameters rather than adjusting through spherical harmonics. 
 
@@ -72,7 +90,17 @@ These parameters behave exactly identically to those in `convexinv`.
 
 ---
 
-## 3. How to Improve Modeling: Parameter Tuning Guide
+## 4. Pole Grid Search
+
+PyMit can run a golden-spiral pole grid with `AsteroidModeler.run_pole_grid_scan(n=..., workers=...)` or from the Streamlit app. The grid tests `2N + 1` initial pole guesses, with longitude stored as `initial_lambda` and latitude stored as `initial_beta`.
+
+*   **Selection**: The best candidate is the successful run with minimum chi-square. Dark-facet percent is saved for diagnostics but is not the selection criterion.
+*   **Outputs**: PyMit saves `<asteroid>_pole_scan_results.csv`, `<asteroid>_pole_scan_best.json`, `<asteroid>_pole_scan_map.png`, period and shadow-percent map variants, and fitted-coordinate maps when fitted pole values are available.
+*   **Performance**: Runtime scales with the number of grid points and the cost of each `convexinv` run. Use `workers` conservatively on machines with limited CPU or memory.
+
+---
+
+## 5. How to Improve Modeling: Parameter Tuning Guide
 
 To achieve the best possible asteroid shape model, you will often need to iteratively tune the parameters based on the output of previous runs. Here is a practical guide on how to improve your modeling results:
 

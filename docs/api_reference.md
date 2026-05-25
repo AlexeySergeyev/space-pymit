@@ -2,9 +2,13 @@
 
 This document provides detailed information about the functions available in the `asteroid_modeling` module. For an introduction and installation instructions, see the main [README.md](../README.md).
 
-## Local GUI
+## Local Streamlit GUI
 
 The repository includes a Streamlit app at `apps/streamlit_app.py`. It is a thin browser-based wrapper around `AsteroidModeler`, so the numerical behavior is the same as the Python API. Use the GUI for interactive local runs and the Python API for scripts, notebooks, and automated workflows. The GUI accepts DAMIT plaintext URLs or uploaded lightcurve files, exposes the DAMIT LSL scattering parameters, and saves sidebar values to `.pymit_last_params.json` after successful runs.
+
+Pipeline execution runs in a background worker thread in the Streamlit app. The browser polls the thread-safe log state once per second, so stdout and stderr from the modeling pipeline appear while the job is still running.
+
+The GUI can run `period_scan`, convex inversion, Minkowski reconstruction, pole-grid search, sky projection, and synthetic lightcurve generation. In the GUI, `p2`, `p3`, and `p4` have `Fit` checkboxes. These are off by default, which keeps the phase-function values fixed and is usually more stable for relative lightcurves.
 
 ## Module Layout
 
@@ -17,6 +21,8 @@ Implementation details are split by responsibility:
 -   `pymit.shape`: Minkowski output parsing, triangulation, and OBJ load/save helpers.
 -   `pymit.plotting`: Matplotlib and Plotly 3D model plotting.
 -   `pymit.projection`: sky-plane projection and fixed-geometry synthetic lightcurve helpers.
+-   `pymit.period_scan`: `period_scan` output parsing, best-period selection, CSV export, and chi-square/RMS plot generation.
+-   `pymit.pole_scan`: golden-spiral pole grids, scan result serialization, and pole-map plotting.
 -   `pymit.executables`: subprocess wrappers for `convexinv` and `minkowski`.
 
 ## Core Classes
@@ -38,6 +44,15 @@ Initializes the modeler instance.
 ```
 Loads lightcurves into the modeler.
 -   `source` (str or pd.DataFrame): Path to the observed light curves data file (`.csv` or native DAMIT/convexinv `.txt` / `.lc.txt` format), an `http(s)` URL to a native DAMIT plaintext lightcurve export, or a `pandas.DataFrame`.
+-   Native text files are normalized before `convexinv` when their curve header counts do not match the actual rows. Repaired files are written as `*_convexinv.txt` in the modeler's output directory.
+
+### `normalize_native_lcs_format`
+```python
+from pymit.asteroid_modeling import normalize_native_lcs_format
+
+changed = normalize_native_lcs_format("data/153814_lcs4DAMIT_lite.txt", "output/153814_convexinv.txt")
+```
+Rewrites a native DAMIT/`convexinv` lightcurve file with internally consistent per-curve point counts and canonical A3301-style numeric formatting. It preserves the numeric values and returns `True` when the output differs from the input.
 
 #### `load_parameters`
 ```python
@@ -58,7 +73,7 @@ Common `inversion_json` keys:
 -   `phase_func_a`: DAMIT LSL `p2`, phase function amplitude `a`.
 -   `phase_func_d`: DAMIT LSL `p3`, phase function width `d`.
 -   `phase_func_k`: DAMIT LSL `p4`, phase function slope `k`.
--   `phase_func_*_fixed`: `0` means fixed, `1` means free. Keeping scattering parameters fixed is often more stable for relative lightcurves.
+-   `phase_func_*_fixed`: `0` means fixed, `1` means free. Keeping scattering parameters fixed is often more stable for relative lightcurves. Freeing `p2`/`phase_func_a`, `p3`/`phase_func_d`, or `p4`/`phase_func_k` requires enough phase-angle coverage; otherwise `convexinv` can fail with singular matrix errors.
 -   `convexity_regularization`, `spherical_harmonics_degree`, `spherical_harmonics_order`, `number_of_rows`, `iteration_stop_condition`.
 
 Common `conjgradinv_json` keys:
@@ -68,15 +83,55 @@ Common `conjgradinv_json` keys:
 
 #### `run_inversion`
 ```python
-    def run_inversion(self) -> tuple[np.ndarray, list[list[int]]]:
+    def run_inversion(
+        self,
+        verbose: bool = False,
+        run_period_scan: bool = False,
+        period_scan_options: dict | None = None,
+        period_scan_param_file: str | None = None,
+        period_scan_workers: int = 1,
+    ) -> tuple[np.ndarray, list[list[int]]]:
 ```
-Executes the shape reconstruction using the loaded lightcurves and parameters.
+Runs `convexinv` and `minkowski` using the loaded lightcurves and parameters. When `run_period_scan=True`, PyMit runs DAMIT `period_scan` first, writes raw/CSV/PNG period-scan outputs, stores the best result on `modeler.period_scan_result`, and uses that best period as `initial_period` for `convexinv`.
 **Returns:**
 -   `vertices` (np.ndarray): A numpy array of shape `(N, 3)` containing the X, Y, Z coordinates.
 -   `faces` (list[list[int]]): A list where each element is a face, defined by a list of 1-based vertex indices.
 
+#### `run_period_scan`
+```python
+    def run_period_scan(
+        self,
+        period_scan_options: dict | None = None,
+        param_file: str | None = None,
+        lightcurve_file: str | None = None,
+        verbose: bool = False,
+        workers: int = 1,
+    ) -> PeriodScanResult:
+```
+Runs DAMIT `period_scan` without running reconstruction. If `param_file` is omitted, `period_scan_options` is written to `<asteroid>_input_period_scan.txt`. The raw output is saved as `<asteroid>_period_scan.txt`, parsed rows are saved as `<asteroid>_period_scan.csv`, and the chi-square/RMS plot is saved as `<asteroid>_period_scan.png`.
+
+When `workers > 1`, the period range is split into contiguous subranges and merged back into one raw output file. The returned `PeriodScanResult` is the row with the smallest chi-square.
+
+#### `run_pole_grid_scan`
+```python
+    def run_pole_grid_scan(
+        self,
+        n: int,
+        workers: int = 1,
+        reconstruct_best: bool = True,
+        verbose: bool = False,
+    ) -> tuple[np.ndarray, list[list[int]]]:
+```
+Runs `convexinv` over a golden-spiral grid of initial pole guesses before reconstruction. The grid uses `2N + 1` points from `golden_spiral_g10(n)`, where `initial_lambda = lon` and `initial_beta = lat`.
+
+Each candidate keeps the current inversion settings except for `initial_lambda` and `initial_beta`. Results are written to `<asteroid>_pole_scan_results.csv`; the selected minimum-chi-square candidate is written to `<asteroid>_pole_scan_best.json`. A static Matplotlib pole-solution map is saved as `<asteroid>_pole_scan_map.png`. The dark/shadow facet percent is recorded for diagnostics but is not used for selection.
+
+When `reconstruct_best=True`, the best candidate's areas, modeled lightcurve, and parameter file are copied to the standard output names and `minkowski` reconstructs the final model from that best run.
+
+If successful candidates include fitted pole coordinates, PyMit also saves fitted-coordinate maps named `<asteroid>_pole_scan_map_fitted*.png`.
+
 #### Shape and Plot Utils (Object Methods)
--   `plot_lightcurves_results(save=False, show=True, max_curves=3)`: Plots observed vs modeled brightness against solar phase angle when Sun/Earth vectors are available in the lightcurve input. If vectors are missing, it falls back to rotation phase when period and `t0` are available.
+-   `plot_lightcurves_results(save=False, show=True, max_curves=3)`: Builds an interactive Plotly observed-vs-modeled brightness figure against solar phase angle when Sun/Earth vectors are available in the lightcurve input. If vectors are missing, it falls back to rotation phase when period and `t0` are available. With `save=True`, writes `<asteroid>_lightcurves.html`.
 -   `plot_model(save=False, show=True)`: Renders the 3D shape using Matplotlib.
 -   `plot_model_plotly(save=False, show=True)`: Renders the 3D shape as an interactive HTML file.
 -   `plot_sky_projection(save=False, show=True, jd=..., phase_degrees=None)`: Saves or displays a 2D sky-plane projection of the current model. When `jd` is supplied, the modeler uses the fitted period and the exact first observation JD as `t0`.
@@ -86,6 +141,23 @@ Executes the shape reconstruction using the loaded lightcurves and parameters.
 ---
 
 ## Utilities
+
+### Period Scan Utilities
+
+```python
+from pymit.asteroid_modeling import (
+    PeriodScanResult,
+    find_best_period_scan_result,
+    parse_period_scan_output,
+    save_period_scan_plot,
+    write_period_scan_csv,
+)
+```
+
+-   `parse_period_scan_output(output_file)`: Parses DAMIT `period_scan` rows into `PeriodScanResult` objects.
+-   `find_best_period_scan_result(results)`: Returns the row with the smallest chi-square.
+-   `write_period_scan_csv(results, output_file)`: Writes parsed period-scan rows to CSV.
+-   `save_period_scan_plot(results, output_file, best_result=None)`: Saves the chi-square/RMS plot and marks the selected period.
 
 ### `plot_model`
 Visualizes the 3D shape model.

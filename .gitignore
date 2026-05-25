@@ -17,3 +17,6 @@ venv.bak/
 
 src/pymit.egg-info/
 .pytest_cache/
+
+docs/superpowers/
+docs/examples/

@@ -1,4 +1,5 @@
 import math
+import re
 import signal
 import subprocess
 from pathlib import Path
@@ -7,12 +8,13 @@ from typing import Optional, Union
 import numpy as np
 
 from .errors import AsteroidModelError
-from .paths import CONVEXINV_EXEC, MINKOWSKI_EXEC
+from .paths import CONVEXINV_EXEC, MINKOWSKI_EXEC, PERIOD_SCAN_EXEC
 from .shape import _parse_minkowski_output
 
 
 _MINKOWSKI_MAX_FACES = 6000
 _MINKOWSKI_MAX_AREA_RATIO = 1_000_000.0
+_MINKOWSKI_TIMEOUT_SECONDS = 300.0
 
 
 def run_convexinv(
@@ -21,6 +23,7 @@ def run_convexinv(
     output_areas_file: str,
     output_lc_file: str,
     verbose: bool = False,
+    stdout_log_file: Optional[Union[str, Path]] = None,
 ) -> dict:
     """
     Run the convexinv binary to generate face areas and normals from light curves.
@@ -46,10 +49,10 @@ def run_convexinv(
                 cmd,
                 stdin=f_in,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
             )
-            assert proc.stdout is not None and proc.stderr is not None
+            assert proc.stdout is not None
             for line in proc.stdout:
                 collected_stdout.append(line)
                 if verbose and not line.startswith("f<0"):
@@ -57,7 +60,7 @@ def run_convexinv(
             proc.wait()
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(
-                    proc.returncode, cmd, stderr=proc.stderr.read()
+                    proc.returncode, cmd, stderr="".join(collected_stdout)
                 )
         except subprocess.CalledProcessError as e:
             raise AsteroidModelError(
@@ -67,9 +70,80 @@ def run_convexinv(
             ) from e
 
     result_stdout = "".join(collected_stdout)
+    if stdout_log_file is not None:
+        Path(stdout_log_file).write_text(result_stdout)
 
+    return _parse_convexinv_output(result_stdout)
+
+
+def run_period_scan(
+    param_file: str,
+    lightcurve_file: str,
+    output_periods_file: str,
+    verbose: bool = False,
+    stdout_log_file: Optional[Union[str, Path]] = None,
+) -> None:
+    """
+    Run the DAMIT period_scan binary to estimate a period before convexinv.
+    """
+    if not PERIOD_SCAN_EXEC.exists():
+        raise FileNotFoundError(
+            f"period_scan executable not found at {PERIOD_SCAN_EXEC}. Please run 'make' in {PERIOD_SCAN_EXEC.parent}."
+        )
+
+    cmd = [str(PERIOD_SCAN_EXEC)]
+    if verbose:
+        cmd.append("-v")
+    cmd.extend([param_file, output_periods_file])
+
+    collected_stdout = []
+    with open(lightcurve_file, "rb") as f_in:
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=f_in,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                collected_stdout.append(line)
+                if verbose:
+                    print(line, end="", flush=True)
+            proc.wait()
+            if proc.returncode != 0:
+                raise subprocess.CalledProcessError(
+                    proc.returncode, cmd, stderr="".join(collected_stdout)
+                )
+        except subprocess.CalledProcessError as e:
+            raise AsteroidModelError(
+                f"period_scan failed with return code {e.returncode}.\nStderr: {e.stderr or ''}"
+            ) from e
+
+    if stdout_log_file is not None:
+        Path(stdout_log_file).write_text("".join(collected_stdout))
+
+
+def _parse_convexinv_output(result_stdout: str) -> dict:
     fit = {}
+    chi_re = re.compile(
+        r"\bchi2\s+([-+0-9.eE]+)\s+dev\s+([-+0-9.eE]+)", re.IGNORECASE
+    )
+    dark_re = re.compile(
+        r"dark facet with area\s+([-+0-9.eE]+)\s*%", re.IGNORECASE
+    )
+
     for line in result_stdout.splitlines():
+        chi_match = chi_re.search(line)
+        if chi_match:
+            fit["chi_square"] = float(chi_match.group(1))
+            fit["dev"] = float(chi_match.group(2))
+
+        dark_match = dark_re.search(line)
+        if dark_match:
+            fit["shadow_percent"] = float(dark_match.group(1))
+
         if line.startswith("lambda, beta and period"):
             parts = line.split(":")[1].split()
             fit["lambda"] = float(parts[0])
@@ -85,13 +159,80 @@ def run_convexinv(
     return fit
 
 
+def _convexinv_parameter_label(line_index: int, comment: str) -> str:
+    normalized = comment.lower()
+    if "lambda" in normalized:
+        return "initial lambda"
+    if "beta" in normalized:
+        return "initial beta"
+    if "period" in normalized:
+        return "initial period"
+    if "param. 'a'" in normalized:
+        return "phase function a / DAMIT p2"
+    if "param. 'd'" in normalized:
+        return "phase function d / DAMIT p3"
+    if "param. 'k'" in normalized:
+        return "phase function k / DAMIT p4"
+    if "lambert" in normalized or "coefficient 'c'" in normalized:
+        return "Lambert coefficient c / DAMIT p1"
+    return f"parameter on line {line_index}"
+
+
+def _summarize_convexinv_free_parameters(param_file: str) -> tuple[list[str], bool | None]:
+    free_parameters = []
+    lambert_is_fixed = None
+
+    try:
+        lines = Path(param_file).read_text().splitlines()
+    except OSError:
+        return free_parameters, lambert_is_fixed
+
+    for line_index, line in enumerate(lines, start=1):
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+
+        flag = parts[1]
+        if flag not in {"0", "1"}:
+            continue
+
+        comment = " ".join(parts[2:])
+        label = _convexinv_parameter_label(line_index, comment)
+        is_free = flag == "1"
+        if label == "Lambert coefficient c / DAMIT p1":
+            lambert_is_fixed = not is_free
+        if is_free:
+            free_parameters.append(label)
+
+    return free_parameters, lambert_is_fixed
+
+
 def _format_convexinv_failure(returncode: int, stderr: str, param_file: str) -> str:
     if "Singular Matrix" in stderr:
+        free_parameters, lambert_is_fixed = _summarize_convexinv_free_parameters(param_file)
+        if free_parameters:
+            free_summary = f"Free parameters in {param_file}: {', '.join(free_parameters)}."
+        else:
+            free_summary = (
+                f"No free 0/1 parameters could be identified in {param_file}."
+            )
+
+        if lambert_is_fixed is True:
+            lambert_summary = "Lambert coefficient c is fixed."
+        elif lambert_is_fixed is False:
+            lambert_summary = (
+                "Lambert coefficient c is free; try fixing DAMIT p1/c first."
+            )
+        else:
+            lambert_summary = "Lambert coefficient c status could not be determined."
+
         return (
             f"convexinv failed because its linear solve became singular while using {param_file}.\n"
-            "This often happens when too many parameters are free for the available lightcurve data. "
-            "For A7753, keep the Lambert coefficient fixed: set phase_func_c to the found value "
-            "and phase_func_c_fixed=0.\n"
+            "This often happens when too many parameters are free or poorly constrained for the available lightcurve data.\n"
+            f"{free_summary}\n"
+            f"{lambert_summary}\n"
+            "Try fixing some free parameters, especially phase-function parameters p2/p3/p4, "
+            "then rerun convexinv.\n"
             f"Stderr: {stderr}"
         )
 
@@ -184,6 +325,7 @@ def run_minkowski(
     areas_normals_file: str,
     pwd_dir: Optional[Union[str, Path]] = None,
     verbose: bool = False,
+    timeout_seconds: Optional[float] = _MINKOWSKI_TIMEOUT_SECONDS,
 ) -> tuple[np.ndarray, list[list[int]]]:
     """
     Run the minkowski binary to reconstruct a 3D shape from face areas and normals.
@@ -209,13 +351,21 @@ def run_minkowski(
                 text=True,
                 **run_opts,
             )
-            stdout_data, stderr_data = proc.communicate()
+            stdout_data, stderr_data = proc.communicate(timeout=timeout_seconds)
             if proc.returncode != 0:
                 raise subprocess.CalledProcessError(
                     proc.returncode, [str(MINKOWSKI_EXEC)], stderr=stderr_data
                 )
             if verbose and stderr_data.strip():
                 print(stderr_data, flush=True)
+        except subprocess.TimeoutExpired as e:
+            proc.kill()
+            proc.communicate()
+            raise AsteroidModelError(
+                f"minkowski timed out after {timeout_seconds:g} seconds while reading {areas_normals_file}.\n"
+                "The areas/normals file may be numerically degenerate and can make the Fortran reconstruction stall. "
+                "Try pole grid scan, a different initial spin-axis/period guess, or a lower triangulation row count."
+            ) from e
         except subprocess.CalledProcessError as e:
             raise AsteroidModelError(
                 _format_minkowski_failure(

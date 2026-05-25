@@ -73,6 +73,35 @@ class GuiHelperOptionTests(unittest.TestCase):
             },
         )
 
+    def test_build_inversion_options_can_free_lsl_phase_parameters(self):
+        settings = InversionSettings(
+            initial_lambda=220.0,
+            initial_lambda_fixed=True,
+            initial_beta=0.0,
+            initial_beta_fixed=True,
+            initial_period=5.76198,
+            initial_period_fixed=True,
+            phase_func_a=0.5,
+            phase_func_a_fixed=True,
+            phase_func_d=0.1,
+            phase_func_d_fixed=True,
+            phase_func_k=-1.05,
+            phase_func_k_fixed=True,
+            phase_func_c=0.1,
+            phase_func_c_fixed=False,
+            convexity_regularization=0.1,
+            spherical_harmonics_degree=6,
+            spherical_harmonics_order=6,
+            number_of_rows=8,
+            iteration_stop_condition=50,
+        )
+
+        options = build_inversion_options(settings)
+
+        self.assertEqual(options["phase_func_a_fixed"], 1)
+        self.assertEqual(options["phase_func_d_fixed"], 1)
+        self.assertEqual(options["phase_func_k_fixed"], 1)
+
 
 class GuiHelperDateTests(unittest.TestCase):
     def test_current_julian_date_converts_utc_datetime(self):
@@ -124,8 +153,17 @@ class GuiHelperFileTests(unittest.TestCase):
             (output_dir / "A7753.obj").write_text("obj")
             (output_dir / "A7753_model.html").write_text("<html></html>")
             (output_dir / "A7753_model.png").write_bytes(b"png")
-            (output_dir / "A7753_lightcurves.png").write_bytes(b"lc")
+            (output_dir / "A7753_lightcurves.html").write_text("<html></html>")
+            (output_dir / "A7753_lightcurves_folded_residuals.png").write_bytes(b"png")
             (output_dir / "A7753_areas.txt").write_text("areas")
+            (output_dir / "A7753_pole_scan_results.csv").write_text("index,status\n")
+            (output_dir / "A7753_pole_scan_best.json").write_text("{}")
+            (output_dir / "A7753_pole_scan_map.png").write_bytes(b"png")
+            (output_dir / "A7753_pole_scan_map_period.png").write_bytes(b"png")
+            (output_dir / "A7753_pole_scan_map_shadow_percent.png").write_bytes(b"png")
+            (output_dir / "A7753_pole_scan_map_fitted.png").write_bytes(b"png")
+            (output_dir / "A7753_pole_scan_map_fitted_period.png").write_bytes(b"png")
+            (output_dir / "A7753_pole_scan_map_fitted_shadow_percent.png").write_bytes(b"png")
 
             outputs = collect_generated_outputs(output_dir, "A7753")
 
@@ -135,7 +173,16 @@ class GuiHelperFileTests(unittest.TestCase):
                     GeneratedOutput("OBJ model", output_dir / "A7753.obj", "text/plain"),
                     GeneratedOutput("Interactive model HTML", output_dir / "A7753_model.html", "text/html"),
                     GeneratedOutput("Static model PNG", output_dir / "A7753_model.png", "image/png"),
-                    GeneratedOutput("Lightcurve plot PNG", output_dir / "A7753_lightcurves.png", "image/png"),
+                    GeneratedOutput("Lightcurve plot HTML", output_dir / "A7753_lightcurves.html", "text/html"),
+                    GeneratedOutput("Folded residuals PNG", output_dir / "A7753_lightcurves_folded_residuals.png", "image/png"),
+                    GeneratedOutput("Pole scan results CSV", output_dir / "A7753_pole_scan_results.csv", "text/csv"),
+                    GeneratedOutput("Pole scan best JSON", output_dir / "A7753_pole_scan_best.json", "application/json"),
+                    GeneratedOutput("Pole scan map PNG", output_dir / "A7753_pole_scan_map.png", "image/png"),
+                    GeneratedOutput("Pole scan period map PNG", output_dir / "A7753_pole_scan_map_period.png", "image/png"),
+                    GeneratedOutput("Pole scan shadow map PNG", output_dir / "A7753_pole_scan_map_shadow_percent.png", "image/png"),
+                    GeneratedOutput("Pole scan fitted map PNG", output_dir / "A7753_pole_scan_map_fitted.png", "image/png"),
+                    GeneratedOutput("Pole scan fitted period map PNG", output_dir / "A7753_pole_scan_map_fitted_period.png", "image/png"),
+                    GeneratedOutput("Pole scan fitted shadow map PNG", output_dir / "A7753_pole_scan_map_fitted_shadow_percent.png", "image/png"),
                     GeneratedOutput("Areas and normals TXT", output_dir / "A7753_areas.txt", "text/plain"),
                 ],
             )

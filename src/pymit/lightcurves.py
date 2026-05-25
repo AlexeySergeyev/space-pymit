@@ -3,8 +3,47 @@ import math
 from pathlib import Path
 from typing import Optional, Union
 
-import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.graph_objects as go
+
+
+REQUIRED_LIGHTCURVE_COLUMNS = [
+    "jd",
+    "brightness",
+    "sun_x",
+    "sun_y",
+    "sun_z",
+    "earth_x",
+    "earth_y",
+    "earth_z",
+]
+
+_PLOTLY_MARKER_COLORS = [
+    "#636EFA",
+    "#EF553B",
+    "#00CC96",
+    "#AB63FA",
+    "#FFA15A",
+    "#19D3F3",
+    "#FF6692",
+    "#B6E880",
+    "#FF97FF",
+    "#FECB52",
+]
+
+
+def validate_lightcurve_dataframe_columns(
+    df: pd.DataFrame, source_label: str = "DataFrame"
+) -> None:
+    """Validate that tabular lightcurve data can be converted to convexinv input."""
+    missing = [column for column in REQUIRED_LIGHTCURVE_COLUMNS if column not in df.columns]
+    if missing:
+        raise ValueError(
+            f"{source_label} lightcurve input is missing required columns: "
+            f"{', '.join(missing)}. Use a native DAMIT/convexinv .txt/.lc file, "
+            "or provide a CSV with jd, brightness, sun_x, sun_y, sun_z, "
+            "earth_x, earth_y, and earth_z columns."
+        )
 
 
 def _phase_angle_degrees(sun_vector, observer_vector) -> float:
@@ -42,16 +81,14 @@ def _lightcurve_x_value(
     return float(parts[0]) - t0, "Time (Days from curve start)"
 
 
-def plot_lightcurves(
+def build_lightcurve_figure(
     lightcurve: Union[str, pd.DataFrame],
     output_file: str,
-    save_path: Optional[str] = None,
-    show: bool = True,
     max_curves: int = 3,
     period_hours: Optional[float] = None,
     zero_time: Optional[float] = None,
-) -> None:
-    """Plot observed vs modeled light curves."""
+) -> go.Figure:
+    """Build an interactive observed-vs-modeled lightcurve figure."""
     temp_input = None
     if isinstance(lightcurve, pd.DataFrame):
         temp_input = "temp_plot_lcs_input.txt"
@@ -67,9 +104,8 @@ def plot_lightcurves(
     try:
         with open(actual_input_file, "r") as f_in, open(output_file, "r") as f_out:
             n_curves = int(f_in.readline().strip())
-
-            plt.figure(figsize=(10, 6))
             x_label = "Time (Days from curve start)"
+            fig = go.Figure()
 
             for i in range(n_curves):
                 header = f_in.readline().split()
@@ -93,43 +129,87 @@ def plot_lightcurves(
                     y_mod.append(float(f_out.readline().strip()))
 
                 if i < max_curves:
-                    plt.plot(x, y_obs, "o", label=f"Observed Curve {i+1}")
-                    plt.plot(x, y_mod, "x", label=f"Modeled Curve {i+1}")
+                    curve_number = i + 1
+                    color = _PLOTLY_MARKER_COLORS[i % len(_PLOTLY_MARKER_COLORS)]
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x,
+                            y=y_obs,
+                            mode="markers",
+                            name=f"Observed Curve {curve_number}",
+                            marker=dict(symbol="circle", size=8, color=color),
+                            customdata=[
+                                [curve_number, "Observed"] for _ in x
+                            ],
+                            hovertemplate=(
+                                "Curve %{customdata[0]}<br>"
+                                "Type: %{customdata[1]}<br>"
+                                f"{x_label}: %{{x:.6g}}<br>"
+                                "Brightness: %{y:.6g}<extra></extra>"
+                            ),
+                        )
+                    )
+                    fig.add_trace(
+                        go.Scatter(
+                            x=x,
+                            y=y_mod,
+                            mode="markers",
+                            name=f"Modeled Curve {curve_number}",
+                            marker=dict(symbol="x", size=9, color=color),
+                            customdata=[
+                                [curve_number, "Modeled"] for _ in x
+                            ],
+                            hovertemplate=(
+                                "Curve %{customdata[0]}<br>"
+                                "Type: %{customdata[1]}<br>"
+                                f"{x_label}: %{{x:.6g}}<br>"
+                                "Brightness: %{y:.6g}<extra></extra>"
+                            ),
+                        )
+                    )
 
-            plt.xlabel(x_label)
-            plt.ylabel("Brightness")
-            plt.title("Observed vs Modeled Brightness vs Phase")
-            plt.legend()
-
-            if save_path:
-                plt.savefig(save_path, dpi=150, bbox_inches="tight")
-
-            if show:
-                plt.show()
-
-            plt.close()
+            fig.update_layout(
+                title="Observed vs Modeled Brightness vs Phase",
+                xaxis_title=x_label,
+                yaxis_title="Brightness",
+                template="plotly_white",
+                legend_title_text="Lightcurve",
+                margin=dict(l=50, r=20, t=60, b=50),
+            )
+            return fig
     finally:
         if temp_input and Path(temp_input).exists():
             Path(temp_input).unlink()
 
 
+def plot_lightcurves(
+    lightcurve: Union[str, pd.DataFrame],
+    output_file: str,
+    save_path: Optional[str] = None,
+    show: bool = True,
+    max_curves: int = 3,
+    period_hours: Optional[float] = None,
+    zero_time: Optional[float] = None,
+) -> go.Figure:
+    """Plot observed vs modeled light curves as an interactive Plotly figure."""
+    fig = build_lightcurve_figure(
+        lightcurve,
+        output_file,
+        max_curves=max_curves,
+        period_hours=period_hours,
+        zero_time=zero_time,
+    )
+    if save_path:
+        fig.write_html(save_path)
+    if show:
+        fig.show()
+    return fig
+
+
 def dataframe_to_lcs_format(df: pd.DataFrame, output_file: str) -> None:
     """Convert a lightcurve DataFrame into the text format expected by convexinv."""
     curves = {}
-
-    required_cols = [
-        "jd",
-        "brightness",
-        "sun_x",
-        "sun_y",
-        "sun_z",
-        "earth_x",
-        "earth_y",
-        "earth_z",
-    ]
-    for col in required_cols:
-        if col not in df.columns:
-            raise ValueError(f"Missing required column in DataFrame: {col}")
+    validate_lightcurve_dataframe_columns(df)
 
     for row_idx, row in df.iterrows():
         try:
@@ -188,6 +268,134 @@ def csv_to_lcs_format(csv_file: str, output_file: str) -> None:
             curves[cid]["points"].append((jd, bright, sx, sy, sz, ex, ey, ez))
 
     _write_lcs_dict_to_file(curves, output_file)
+
+
+def normalize_native_lcs_format(input_file: Union[str, Path], output_file: Union[str, Path]) -> bool:
+    """
+    Rewrite a native DAMIT/convexinv lightcurve file with internally consistent
+    curve counts.
+
+    Some lcs4DAMIT exports contain valid point rows but an overstated block
+    count in a curve header. convexinv reads exactly the declared number of
+    rows, so this function repairs those headers while preserving the numeric
+    values and writing canonical DAMIT-style rows. Returns True when the output
+    differs from the input.
+    """
+    input_path = Path(input_file)
+    output_path = Path(output_file)
+    original_text = input_path.read_text()
+    lines = [line.strip() for line in original_text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(f"Native lightcurve file is empty: {input_path}")
+
+    first = lines[0].split()
+    if len(first) != 1:
+        raise ValueError(f"Invalid native lightcurve curve-count header in {input_path}: {lines[0]}")
+    try:
+        declared_curves = int(first[0])
+    except ValueError as exc:
+        raise ValueError(f"Invalid native lightcurve curve-count header in {input_path}: {lines[0]}") from exc
+
+    index = 1
+    curves = []
+    changed = False
+    for curve_index in range(declared_curves):
+        if index >= len(lines):
+            changed = True
+            break
+
+        header = lines[index].split()
+        if len(header) < 2:
+            raise ValueError(
+                f"Invalid native lightcurve block header at line {index + 1} in {input_path}: {lines[index]}"
+            )
+        try:
+            declared_points = int(header[0])
+            relative_flag = int(header[1])
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid native lightcurve block header at line {index + 1} in {input_path}: {lines[index]}"
+            ) from exc
+        index += 1
+
+        points = []
+        while index < len(lines) and len(points) < declared_points:
+            parts = lines[index].split()
+            remaining_curves = declared_curves - curve_index - 1
+            if remaining_curves > 0 and _looks_like_native_block_header(parts):
+                changed = True
+                break
+            if len(parts) < 8:
+                raise ValueError(
+                    f"Invalid native lightcurve data row at line {index + 1} in {input_path}: {lines[index]}"
+                )
+            try:
+                point = tuple(float(value) for value in parts[:8])
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid native lightcurve data row at line {index + 1} in {input_path}: {lines[index]}"
+                ) from exc
+            points.append(point)
+            index += 1
+
+        if len(points) != declared_points:
+            changed = True
+        curves.append({"is_relative": relative_flag, "points": points})
+
+    if index < len(lines):
+        if not curves:
+            raise ValueError(
+                f"Native lightcurve file has extra rows but no curves in {input_path}."
+            )
+        while index < len(lines):
+            parts = lines[index].split()
+            if len(parts) < 8:
+                raise ValueError(
+                    f"Invalid native lightcurve data row at line {index + 1} in {input_path}: {lines[index]}"
+                )
+            try:
+                point = tuple(float(value) for value in parts[:8])
+            except ValueError as exc:
+                raise ValueError(
+                    f"Invalid native lightcurve data row at line {index + 1} in {input_path}: {lines[index]}"
+                ) from exc
+            curves[-1]["points"].append(point)
+            index += 1
+        changed = True
+
+    output_lines = [str(len(curves))]
+    for curve in curves:
+        output_lines.append(f"{len(curve['points'])} {curve['is_relative']}")
+        for point in curve["points"]:
+            output_lines.append(_format_native_lightcurve_row(point))
+    output_text = "\n".join(output_lines) + "\n"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(output_text)
+
+    if len(curves) != declared_curves:
+        changed = True
+    return changed or output_text != original_text
+
+
+def _format_native_lightcurve_row(point: tuple[float, ...]) -> str:
+    jd, brightness, sx, sy, sz, ex, ey, ez = point
+    return (
+        f"{jd:.6f} {brightness:.6e} "
+        f"{sx:.6e} {sy:.6e} {sz:.6e} "
+        f"{ex:.6e} {ey:.6e} {ez:.6e}"
+    )
+
+
+def _looks_like_native_block_header(parts: list[str]) -> bool:
+    if len(parts) != 2:
+        return False
+    try:
+        int(parts[0])
+        int(parts[1])
+    except ValueError:
+        return False
+    return True
 
 
 def _write_lcs_dict_to_file(curves: dict, output_file: str) -> None:

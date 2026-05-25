@@ -68,3 +68,57 @@ def create_conjgradinv_param_file(options: dict, output_file: str) -> None:
 
     with open(output_file, "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def create_period_scan_param_file(options: dict, output_file: str) -> None:
+    """
+    Programmatically create the DAMIT period_scan parameter file.
+
+    Defaults mirror `damit/input_period_scan`.
+    """
+    defaults = {
+        "period_start": 5.7615,
+        "period_end": 5.7625,
+        "period_interval_coefficient": 0.8,
+        "convexity_weight": 0.1,
+        "spherical_harmonics_degree": 3,
+        "spherical_harmonics_order": 3,
+        "number_of_rows": 4,
+        "phase_func_a": 0.5,
+        "phase_func_a_fixed": 0,
+        "phase_func_d": 0.1,
+        "phase_func_d_fixed": 0,
+        "phase_func_k": -0.5,
+        "phase_func_k_fixed": 0,
+        "phase_func_c": 0.1,
+        "phase_func_c_fixed": 0,
+        "iteration_stop_condition": 50,
+        "minimum_number_of_iterations": 10,
+    }
+
+    opts = {**defaults, **(options or {})}
+
+    lines = [
+        (
+            f"{opts['period_start']} {opts['period_end']} "
+            f"{opts['period_interval_coefficient']}\tperiod start - end - interval coeff."
+        ),
+        f"{opts['convexity_weight']}\t\t\tconvexity weight",
+        (
+            f"{opts['spherical_harmonics_degree']} {opts['spherical_harmonics_order']}"
+            "\t\t\tdegree and order of spherical harmonics"
+        ),
+        f"{opts['number_of_rows']}\t\t\tno. of rows",
+        f"{opts['phase_func_a']}\t{opts['phase_func_a_fixed']}\t\tscattering parameters",
+        f"{opts['phase_func_d']}\t{opts['phase_func_d_fixed']}",
+        f"{opts['phase_func_k']}\t{opts['phase_func_k_fixed']}",
+        f"{opts['phase_func_c']}\t{opts['phase_func_c_fixed']}",
+        f"{opts['iteration_stop_condition']}\t\t\titeration stop condidion",
+        (
+            f"{opts['minimum_number_of_iterations']}\t\t\tminimum number of iterations "
+            "(only if the above value < 1)"
+        ),
+    ]
+
+    with open(output_file, "w") as f:
+        f.write("\n".join(lines) + "\n")
